@@ -17,12 +17,21 @@ pub struct ErrorBody {
 }
 
 pub fn not_found(request_id: impl Into<String>) -> Response {
+    json_error(StatusCode::NOT_FOUND, "NOT_FOUND", "资源不存在", request_id)
+}
+
+pub fn json_error(
+    status: StatusCode,
+    code: &str,
+    message: &str,
+    request_id: impl Into<String>,
+) -> Response {
     (
-        StatusCode::NOT_FOUND,
+        status,
         axum::Json(ErrorResponse {
             error: ErrorBody {
-                code: "NOT_FOUND".into(),
-                message: "资源不存在".into(),
+                code: code.into(),
+                message: message.into(),
                 request_id: request_id.into(),
             },
         }),
