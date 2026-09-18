@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::{
     Router,
@@ -10,12 +12,14 @@ use axum::{
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
+use crate::db::Db;
 use crate::error;
 
 #[derive(Clone)]
 pub struct AppState {
     pub web_dir: PathBuf,
-    pub ready: bool,
+    pub ready: Arc<AtomicBool>,
+    pub db: Option<Arc<Db>>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -39,7 +43,12 @@ async fn live() -> impl IntoResponse {
 }
 
 async fn ready(State(state): State<AppState>) -> Response {
-    if state.ready {
+    let ok = state.ready.load(Ordering::Relaxed)
+        && match &state.db {
+            Some(db) => db.query_rows("SELECT 1", vec![]).await.is_ok(),
+            None => true,
+        };
+    if ok {
         (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "application/json")],

@@ -3,6 +3,7 @@ use axum::{
     body::to_bytes,
     http::{Method, Request, StatusCode},
 };
+use std::sync::{Arc, atomic::AtomicBool};
 use tower::ServiceExt;
 
 use litebeat::http::{AppState, router};
@@ -12,7 +13,8 @@ fn app() -> (Router, tempfile::TempDir) {
     std::fs::write(dir.path().join("index.html"), "<html></html>").unwrap();
     let app = router(AppState {
         web_dir: dir.path().to_path_buf(),
-        ready: true,
+        ready: Arc::new(AtomicBool::new(true)),
+        db: None,
     });
     (app, dir)
 }
