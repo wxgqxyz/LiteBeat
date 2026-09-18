@@ -450,7 +450,9 @@ version = "0.1.0"
 dependencies = [
  "argon2",
  "axum",
+ "futures-core",
  "getrandom 0.4.3",
+ "http-body-util",
  "rpassword",
  "rusqlite",
  "serde",

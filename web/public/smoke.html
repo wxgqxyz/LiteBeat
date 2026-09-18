@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <title>LiteBeat 播放冒烟页</title>
+</head>
+<body>
+  <h1>LiteBeat T04 播放冒烟</h1>
+  <form id="creds">
+    <label>用户名 <input id="user" autocomplete="username" /></label>
+    <label>口令 <input id="pass" type="password" autocomplete="current-password" /></label>
+    <button id="run" type="submit">开始冒烟</button>
+  </form>
+  <pre id="log"></pre>
+  <script>
+    // 手动验证页：登录 → 依次播放给定曲目 ID → 播放推进与拖动定位断言。
+    // 经 vite dev（/api 与 /media 已代理到后端）打开 http://localhost:5173/smoke.html 使用。
+    const logEl = document.getElementById('log');
+    const log = (m) => { logEl.textContent += m + '\n'; };
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    function once(audio, event) {
+      return new Promise((resolve, reject) => {
+        audio.addEventListener(event, resolve, { once: true });
+        audio.addEventListener('error',
+          () => reject(new Error('audio error ' + (audio.error && audio.error.code))), { once: true });
+      });
+    }
+
+    async function smokeTrack(id, label) {
+      const audio = new Audio();
+      audio.muted = true;
+      audio.preload = 'auto';
+      audio.src = '/media/tracks/' + id;
+      await once(audio, 'loadedmetadata');
+      const duration = audio.duration;
+      if (!(duration > 0.5 && duration < 3)) throw new Error(label + ' 时长异常: ' + duration);
+      await audio.play();
+      await sleep(300);
+      const t1 = audio.currentTime;
+      if (!(t1 > 0.05)) throw new Error(label + ' 播放未推进: ' + t1);
+      const target = Math.min(t1 + 0.3, duration - 0.05);
+      audio.currentTime = target;
+      await once(audio, 'seeked');
+      await sleep(150);
+      const t2 = audio.currentTime;
+      if (Math.abs(t2 - target) > 0.25) throw new Error(label + ' 拖动位置不符: target=' + target + ' now=' + t2);
+      audio.pause();
+      log('PASS ' + label + ' duration=' + duration.toFixed(2) + 's t1=' + t1.toFixed(2) + 's t2=' + t2.toFixed(2) + 's');
+    }
+
+    document.getElementById('creds').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const username = document.getElementById('user').value;
+      const password = document.getElementById('pass').value;
+      try {
+        const login = await fetch('/api/v1/auth/login', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+        if (!login.ok) throw new Error('登录失败 HTTP ' + login.status);
+        log('登录成功');
+        for (const [id, label] of [[1, 'mp3'], [2, 'm4a'], [3, 'wav']]) await smokeTrack(id, label);
+        log('SMOKE_RESULT=PASS');
+      } catch (err) {
+        log('SMOKE_RESULT=FAIL ' + err.message);
+      }
+    });
+  </script>
+</body>
+</html>

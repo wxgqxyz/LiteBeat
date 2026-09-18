@@ -15,6 +15,7 @@ fn app() -> (Router, tempfile::TempDir) {
         web_dir: dir.path().to_path_buf(),
         ready: Arc::new(AtomicBool::new(true)),
         db: None,
+        media: Arc::new(litebeat::media::MediaEnv::default()),
     });
     (app, dir)
 }

@@ -20,6 +20,7 @@ pub struct AppState {
     pub web_dir: PathBuf,
     pub ready: Arc<AtomicBool>,
     pub db: Option<Arc<Db>>,
+    pub media: Arc<crate::media::MediaEnv>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -30,6 +31,7 @@ pub fn router(state: AppState) -> Router {
         .route_service("/", ServeFile::new(state.web_dir.join("index.html")))
         .nest_service("/assets", ServeDir::new(assets_dir))
         .merge(crate::auth::auth_router())
+        .merge(crate::media::media_router())
         .fallback(fallback)
         .layer(TraceLayer::new_for_http())
         .with_state(state)

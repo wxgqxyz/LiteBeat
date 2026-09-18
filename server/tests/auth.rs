@@ -55,6 +55,7 @@ impl TestApp {
             web_dir: dir.path().to_path_buf(),
             ready: Arc::new(AtomicBool::new(true)),
             db: serve_db.then(|| Arc::clone(&db)),
+            media: Arc::new(litebeat::media::MediaEnv::default()),
         });
         Self {
             router,

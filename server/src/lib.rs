@@ -3,6 +3,7 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod http;
+pub mod media;
 
 use std::{net::SocketAddr, path::Path, sync::Arc, sync::atomic::AtomicBool};
 
@@ -19,6 +20,10 @@ pub async fn serve(
     let db = tokio::task::spawn_blocking(move || db::Db::open(db_path, db::DbOptions::default()))
         .await??;
     let listener = TcpListener::bind(address).await?;
+    let media = Arc::new(media::MediaEnv::new(
+        &config.limits,
+        config.library.roots.iter().map(|root| &root.path),
+    ));
     tracing::info!(%address, "LiteBeat listening");
     axum::serve(
         listener,
@@ -26,6 +31,7 @@ pub async fn serve(
             web_dir: config.server.web_dir,
             ready: Arc::new(AtomicBool::new(true)),
             db: Some(Arc::clone(&db)),
+            media,
         }),
     )
     .with_graceful_shutdown(shutdown_signal())
