@@ -16,6 +16,7 @@ fn app() -> (Router, tempfile::TempDir) {
         ready: Arc::new(AtomicBool::new(true)),
         db: None,
         media: Arc::new(litebeat::media::MediaEnv::default()),
+        scans: Arc::new(litebeat::scanner::ScanEnv::default()),
     });
     (app, dir)
 }

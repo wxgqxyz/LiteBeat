@@ -21,6 +21,7 @@ pub struct AppState {
     pub ready: Arc<AtomicBool>,
     pub db: Option<Arc<Db>>,
     pub media: Arc<crate::media::MediaEnv>,
+    pub scans: Arc<crate::scanner::ScanEnv>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -32,6 +33,7 @@ pub fn router(state: AppState) -> Router {
         .nest_service("/assets", ServeDir::new(assets_dir))
         .merge(crate::auth::auth_router())
         .merge(crate::media::media_router())
+        .merge(crate::scanner::scanner_router())
         .fallback(fallback)
         .layer(TraceLayer::new_for_http())
         .with_state(state)

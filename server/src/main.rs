@@ -55,8 +55,13 @@ async fn main() -> Result<(), BoxError> {
             let config_path = config_flag(&mut args)?;
             admin_create(&config_path).await
         }
+        Some(command) if command == "scan-worker" => {
+            // 协调器拉起的受限子进程：stdin 请求、stdout 响应，直到 EOF。
+            litebeat::scanner::worker::worker_main();
+            Ok(())
+        }
         _ => Err(
-            "usage: litebeat serve --config <file> | litebeat db migrate --config <file> | litebeat admin create --config <file>".into(),
+            "usage: litebeat serve --config <file> | litebeat db migrate --config <file> | litebeat admin create --config <file> | litebeat scan-worker".into(),
         ),
     }
 }

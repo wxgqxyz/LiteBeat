@@ -21,6 +21,10 @@ getrandom.workspace = true
 rpassword.workspace = true
 http-body-util.workspace = true
 futures-core.workspace = true
+lofty.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true
 
 [dev-dependencies]
 tower.workspace = true

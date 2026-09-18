@@ -56,6 +56,7 @@ impl TestApp {
             ready: Arc::new(AtomicBool::new(true)),
             db: serve_db.then(|| Arc::clone(&db)),
             media: Arc::new(litebeat::media::MediaEnv::default()),
+            scans: Arc::new(litebeat::scanner::ScanEnv::default()),
         });
         Self {
             router,

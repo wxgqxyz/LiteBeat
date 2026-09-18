@@ -4,6 +4,7 @@ pub mod db;
 pub mod error;
 pub mod http;
 pub mod media;
+pub mod scanner;
 
 use std::{net::SocketAddr, path::Path, sync::Arc, sync::atomic::AtomicBool};
 
@@ -19,11 +20,14 @@ pub async fn serve(
     let db_path = config.storage.data_dir.join("litebeat.db");
     let db = tokio::task::spawn_blocking(move || db::Db::open(db_path, db::DbOptions::default()))
         .await??;
+    // 上一进程遗留的 queued/running 扫描必已丢失，先落 interrupted 再对外服务。
+    scanner::mark_interrupted(&db).await?;
     let listener = TcpListener::bind(address).await?;
     let media = Arc::new(media::MediaEnv::new(
         &config.limits,
         config.library.roots.iter().map(|root| &root.path),
     ));
+    let scans = scanner::ScanEnv::new(scanner::ScanConfig::production());
     tracing::info!(%address, "LiteBeat listening");
     axum::serve(
         listener,
@@ -32,6 +36,7 @@ pub async fn serve(
             ready: Arc::new(AtomicBool::new(true)),
             db: Some(Arc::clone(&db)),
             media,
+            scans,
         }),
     )
     .with_graceful_shutdown(shutdown_signal())

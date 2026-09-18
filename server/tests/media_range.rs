@@ -50,6 +50,7 @@ impl App {
             ready: Arc::new(AtomicBool::new(true)),
             db: Some(Arc::clone(&db)),
             media: Arc::clone(&media),
+            scans: Arc::new(litebeat::scanner::ScanEnv::default()),
         });
         Self {
             router,

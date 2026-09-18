@@ -9,7 +9,7 @@ license = "MIT"
 
 [workspace.dependencies]
 axum = "0.8.4"
-tokio = { version = "1.47.1", features = ["macros", "net", "rt-multi-thread", "signal", "fs", "time", "io-util"] }
+tokio = { version = "1.47.1", features = ["macros", "net", "rt-multi-thread", "signal", "fs", "time", "io-util", "process"] }
 tower = "0.5.2"
 tower-http = { version = "0.6.6", features = ["fs", "trace"] }
 http-body-util = "0.1"
@@ -25,3 +25,10 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt"] }
 argon2 = { version = "0.5", default-features = false, features = ["alloc", "password-hash", "std"] }
 getrandom = "0.4"
 rpassword = "7"
+lofty = "0.25.2"
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_JobObjects",
+    "Win32_System_Threading",
+] }
