@@ -115,3 +115,11 @@ impl IntoResponse for AuthError {
         self.to_response("unassigned")
     }
 }
+
+pub mod csrf;
+pub mod password;
+pub mod rate_limit;
+pub mod routes;
+pub mod session;
+
+pub use routes::auth_router;

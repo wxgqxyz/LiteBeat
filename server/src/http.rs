@@ -29,6 +29,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health/ready", get(ready))
         .route_service("/", ServeFile::new(state.web_dir.join("index.html")))
         .nest_service("/assets", ServeDir::new(assets_dir))
+        .merge(crate::auth::auth_router())
         .fallback(fallback)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
