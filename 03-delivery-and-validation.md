@@ -232,14 +232,18 @@ HEAD + Range            -> 200，无响应体，完整 Content-Length
 
 **输入：** 已扫描曲目、规范化字段与 FTS。**输出：** tracks/albums/search/queue-ids 端点及 `Page<TrackSummary>`。
 
-- [ ] 先写同标题多首歌曲的翻页测试、过滤器与游标不匹配测试，以及非法 limit 测试。
-- [ ] 实现游标分页，排序必须以 id 作为稳定次级键，规范化名称排序/比较与索引统一使用 NOCASE；不对每页执行全表 COUNT。
-- [ ] 1–2 字符前缀查询使用普通索引，3 字符及以上使用字面 trigram 查询；验证 FTS 元字符安全处理。
-- [ ] 搜索样本至少包含“周”“周杰”“周杰伦”、英文大小写、全角字符、引号、`%`、`_` 和不存在的名称。
-- [ ] queue-ids 最多返回 1000 ID 与 truncated 标志；禁止借此一次读取全库详情。
-- [ ] 创建可复现的 1 万/10 万条元数据造数脚本，数据种子固定，标题分布包含重复与中英文混合。
+- [x] 先写同标题多首歌曲的翻页测试、过滤器与游标不匹配测试，以及非法 limit 测试。（`pagination_with_duplicate_titles_is_stable_and_complete`：同名 5 首按 limit=2 走完不重不漏；`invalid_limit_sort_and_cursor_rejected`：limit `0|101|abc` 与 `sort=bogus` 返回 400，artist=X 的游标用于 artist=Y 返回 400 `INVALID_CURSOR`）
+- [x] 实现游标分页，排序必须以 id 作为稳定次级键，规范化名称排序/比较与索引统一使用 NOCASE；不对每页执行全表 COUNT。（游标为 base64url(JSON)，≤512 字节，携带版本 + 过滤器摘要 + `(sort_title,id)` 或 `(id)` 键；每页只多取一行判 `has_more`，无 COUNT；新增 `T06` 走查测试用 HTTP 把 1 万条按 limit=100 翻完，与直接 SQL 的 `(sort_title COLLATE NOCASE,id)` 全序逐条比对，歌手过滤同样走查比对）
+- [x] 1–2 字符前缀查询使用普通索引，3 字符及以上使用字面 trigram 查询；验证 FTS 元字符安全处理。（短前缀按 title/artist/album 三列各跑一次索引查询再按全局序归并去重；FTS 侧用户词双引号加倍后整体包裹为字面短语，绝不作为表达式求值。踩坑记录：fts5 表起别名后 `别名 MATCH ?` 会被判 `no such column`，故 SQL 固定用表名参与 JOIN）
+- [x] 搜索样本至少包含“周”“周杰”“周杰伦”、英文大小写、全角字符、引号、`%`、`_` 和不存在的名称。（`search_samples_cover_chinese_case_fullwidth_and_metachars` 逐项断言命中集合：`_h` 只命中 `_hidden track`，证明 `_` 未被当通配符；`50%`、`他说“周杰`、`"周杰" AND`、`ＪＡＹ　Zhou`、`QUEEN`、不存在名称空结果均已断言）
+- [x] queue-ids 最多返回 1000 ID 与 truncated 标志；禁止借此一次读取全库详情。（库内 1005 条时返回 1000 + `truncated:true`；scope 只允许 library/album/favorites/playlist，非法 400，专辑缺失 400，歌单不存在 404、非属主 403；端点只回 ID 数组，详情仍需按 id 逐个取）
+- [x] 创建可复现的 1 万/10 万条元数据造数脚本，数据种子固定，标题分布包含重复与中英文混合。（`scripts/seed-library.py`：实测 1 万条 2.37s（去重标题 2664/10000）、10 万条 34.98s（去重 9869/100000）；同种子两次建库的数据摘要均为 `6f0d0c6101a3957c`，即完全可复现；三个库 `PRAGMA integrity_check` 为 ok 且 FTS `integrity-check` 通过。库中已有数据时默认拒绝写入，需显式 `--clean`）
 
-**验证：** `cargo test -p litebeat --test library_api`。保存 `EXPLAIN QUERY PLAN`，确认短查询命中预期索引；LIMIT 存在不代表查询一定避免了全表扫描。
+**验证：** `cargo test -p litebeat --test library_api`（9 项全绿）。保存 `EXPLAIN QUERY PLAN`，确认短查询命中预期索引；LIMIT 存在不代表查询一定避免了全表扫描。
+
+> 实测证明「LIMIT 不能避免全表扫描」这条警示：1 万行下，写成 `(?1 IS NULL OR sort_artist COLLATE NOCASE = ?1)` 的守卫式谓词得到 `SCAN tracks USING INDEX idx_tracks_title`（扫完整个标题索引逐行过滤），且 `albums` 在 001 里没有排序索引，每页都是 `SCAN albums` + `USE TEMP B-TREE FOR ORDER BY`。因此本任务额外追加 `server/migrations/002_library_indexes.sql`（`idx_albums_title`、`idx_tracks_artist_title`，只增索引不动数据；`SUPPORTED_VERSION` 升到 2，v1 库可原地补跑并有 `v1_database_upgrades_in_place_to_v2_indexes` 测试覆盖），并把全部列表 SQL 改为按游标/过滤器是否存在条件生成谓词片段。修后计划：歌手过滤 `SEARCH tracks USING INDEX idx_tracks_artist_title (sort_artist=?)` 无临时树，专辑翻页 `SCAN albums USING INDEX idx_albums_title`，FTS `SCAN tracks_fts VIRTUAL TABLE INDEX 0:M3` + 主键回表。逐条计划与反面证据留存于 `server/tests/library_api.rs` 的 `explain_query_plan_at_10k_uses_prefix_indexes_without_full_scan` 文档注释。
+>
+> 已知代价（未在本任务消除）：曲目的多列投影不是覆盖索引，深页仍按标题索引顺序扫描，成本随 offset 线性增长；只读预算到点返回 `QUERY_TIMEOUT` 而非挂死。跨列短前缀（如按歌手搜索但按标题排序）需对前缀命中集合建临时排序树，规模受前缀限制，不是全表排序。
 
 ### T07：前端应用外壳、音乐库与全局播放器
 
