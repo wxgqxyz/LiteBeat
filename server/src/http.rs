@@ -33,6 +33,7 @@ pub fn router(state: AppState) -> Router {
         .nest_service("/assets", ServeDir::new(assets_dir))
         .merge(crate::auth::auth_router())
         .merge(crate::media::media_router())
+        .merge(crate::library::library_router())
         .merge(crate::scanner::scanner_router())
         .fallback(fallback)
         .layer(TraceLayer::new_for_http())

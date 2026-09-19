@@ -1,4 +1,5 @@
-//! SQLite 迁移：版本保存在 `user_version` 中，整套迁移在一个事务里执行。
+//! SQLite 迁移：版本保存在 `user_version` 中，每个迁移在自己的事务里执行，
+//! 中途失败只回滚该迁移，不会留下半套 schema。
 
 use std::fmt;
 
@@ -7,7 +8,7 @@ use rusqlite::Connection;
 use super::DbError;
 
 /// 当前程序支持的最低与最高 schema 版本。
-pub const SUPPORTED_VERSION: i32 = 1;
+pub const SUPPORTED_VERSION: i32 = 2;
 
 #[derive(Debug)]
 pub struct Migration {
@@ -17,11 +18,18 @@ pub struct Migration {
 }
 
 /// 已应用的迁移会保持顺序；新增迁移只能追加，不能修改历史 SQL。
-pub const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "001_core",
-    sql: include_str!("../../migrations/001_core.sql"),
-}];
+pub const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "001_core",
+        sql: include_str!("../../migrations/001_core.sql"),
+    },
+    Migration {
+        version: 2,
+        name: "002_library_indexes",
+        sql: include_str!("../../migrations/002_library_indexes.sql"),
+    },
+];
 
 pub fn current_version(conn: &Connection) -> Result<i32, DbError> {
     let version: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
@@ -41,7 +49,9 @@ pub fn migrate(conn: &Connection) -> Result<(), DbError> {
     if start == SUPPORTED_VERSION {
         return Ok(());
     }
-    if start != 0 {
+    // 既可以是全新库（0），也可以是历史已应用版本（例如 v1 库补跑到 v2）；
+    // 只有 user_version 不属于任何迁移收尾版本时才拒绝，避免误伤升级路径。
+    if start != 0 && !MIGRATIONS.iter().any(|m| m.version == start) {
         return Err(DbError::Migration(format!(
             "无法识别的数据库 schema 版本 {start}（程序支持 0 或 {SUPPORTED_VERSION}）"
         )));

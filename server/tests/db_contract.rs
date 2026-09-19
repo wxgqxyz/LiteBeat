@@ -63,7 +63,10 @@ async fn migration_creates_schema_and_passes_integrity_checks() {
         .query_rows_on_write("PRAGMA user_version", vec![])
         .await
         .unwrap();
-    assert_eq!(version[0][0].as_i64(), Some(1));
+    assert_eq!(
+        version[0][0].as_i64(),
+        Some(i64::from(litebeat::db::SUPPORTED_VERSION))
+    );
     let integrity = db
         .query_rows("PRAGMA integrity_check", vec![])
         .await
@@ -83,6 +86,67 @@ async fn migration_creates_schema_and_passes_integrity_checks() {
         .await
         .unwrap();
     assert_eq!(indexes.len(), 3, "三个规范化名称排序索引必须存在");
+    db.close();
+}
+
+/// 追加式迁移：v1 库必须能增量升级到 v2（只补索引），而不是要求重建数据库。
+#[tokio::test]
+async fn v1_database_upgrades_in_place_to_v2_indexes() {
+    assert_eq!(
+        litebeat::db::SUPPORTED_VERSION,
+        2,
+        "002_library_indexes 必须存在且是最后一号迁移"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("litebeat.db");
+    let db = Db::open(&path, options()).unwrap();
+    let root_id = seed_root(&db, "r", "/r").await;
+    let track_id = seed_track(&db, root_id, "a.bin", "晴天").await;
+    db.close();
+
+    // 人为退回 v1：删掉 002 引入的索引并改写 user_version。
+    {
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "DROP INDEX IF EXISTS idx_albums_title;
+             DROP INDEX IF EXISTS idx_tracks_artist_title;
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+        assert_eq!(
+            conn.query_row::<i32, _, _>("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap(),
+            1
+        );
+    }
+
+    let db = Db::open(&path, options()).unwrap();
+    let version = db
+        .query_rows_on_write("PRAGMA user_version", vec![])
+        .await
+        .unwrap();
+    assert_eq!(
+        version[0][0].as_i64(),
+        Some(i64::from(litebeat::db::SUPPORTED_VERSION))
+    );
+    let names = db
+        .query_rows(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name IN
+             ('idx_albums_title','idx_tracks_artist_title') ORDER BY name",
+            vec![],
+        )
+        .await
+        .unwrap();
+    assert_eq!(names.len(), 2, "v1 库升级后必须补齐 002 的两个索引");
+    assert_eq!(
+        count(
+            &db,
+            &format!("SELECT COUNT(*) FROM tracks WHERE id = {track_id}")
+        )
+        .await,
+        1,
+        "升级不得动已有数据"
+    );
     db.close();
 }
 

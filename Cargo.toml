@@ -26,6 +26,8 @@ argon2 = { version = "0.5", default-features = false, features = ["alloc", "pass
 getrandom = "0.4"
 rpassword = "7"
 lofty = "0.25.2"
+unicode-normalization = "0.1"
+base64 = "0.22"
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Security",

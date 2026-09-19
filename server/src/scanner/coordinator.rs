@@ -623,13 +623,10 @@ fn quick_failed_write(error: DbError) -> tokio::sync::oneshot::Receiver<Result<R
     rx
 }
 
-/// 轻量规范化：NFKC 留到 T06；这里先保证排序键可比较（trim、并空白、转小写）。
+/// 排序键规范化与 T06 查询共用同一函数（NFKC、压空白、小写），
+/// 保证「规范化字段与查询使用同一函数」不在两处漂移。
 pub fn sort_key(value: &str) -> String {
-    value
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
+    crate::library::normalize::normalize(value)
 }
 
 // ---------------------------------------------------------------------------
