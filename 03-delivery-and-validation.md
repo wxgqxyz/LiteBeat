@@ -251,12 +251,12 @@ HEAD + Range            -> 200，无响应体，完整 Content-Length
 
 **输入：** 已实现的登录、曲库和媒体 API。**输出：** 真实数据驱动的展示页面及单实例播放器。
 
-- [ ] 建立一个音频引擎，其对外方法为 `load(track: TrackSummary): Promise<void>`、`play(): Promise<void>`、`pause(): void`、`seek(seconds: number): void`、`dispose(): void`。
-- [ ] 状态类型使用本计划第 2 节契约；`load` 只选择媒体并准备状态，用户播放动作再触发 `play`，处理被浏览器拒绝的情况。
-- [ ] 队列模块提供加入、下一首、移除、清空与最多 1000 项的上限检查；随机播放只打乱 ID，单曲循环不复制队列。
-- [ ] 建立根布局与路由，使页面切换不重建音频元素；接入列表、专辑、搜索、空状态和错误状态。
-- [ ] 搜索实现 composition、防抖、AbortController 和响应序号；刷新恢复队列和位置但不自动播放。
-- [ ] 使用第一份文件的视觉初值和移动布局，首屏不加载管理页面或完整图标库。
+- [x] 建立一个音频引擎，其对外方法为 `load(track: TrackSummary): Promise<void>`、`play(): Promise<void>`、`pause(): void`、`seek(seconds: number): void`、`dispose(): void`。（`web/src/lib/player/engine.ts:115/137/166/174/190`；`AudioLike` 只声明引擎真正用到的成员，单测据此注入假元素）
+- [x] 状态类型使用本计划第 2 节契约；`load` 只选择媒体并准备状态，用户播放动作再触发 `play`，处理被浏览器拒绝的情况。（`PlaybackState` 见 `web/src/lib/contracts.ts:3`；`load` 只置 `loading` 并设 `src`（engine.ts:131-133），`play` 的 rejection 按 `NotAllowedError`→`paused`＋“浏览器拒绝了自动播放”、`AbortError`→`loading`、其余→`error` 分流（engine.ts:154-163、262-274），不留未捕获 rejection——单测用 `process.on('unhandledRejection')` 反向兜底）
+- [x] 队列模块提供加入、下一首、移除、清空与最多 1000 项的上限检查；随机播放只打乱 ID，单曲循环不复制队列。（`web/src/lib/player/queue.ts`：`QUEUE_LIMIT=1000`、`add/addIds/playNext/removeAt/remove/clear`；`toggleShuffle` 只对未播放区间的 ID 做 Fisher-Yates（queue.ts:168-176），`repeatOne` 时 `next()` 返回当前条目且不前进游标（queue.ts:194-199）。上限触发时队列长度不变并置 `truncated`，界面用 `queue-truncated` 明示）
+- [x] 建立根布局与路由，使页面切换不重建音频元素；接入列表、专辑、搜索、空状态和错误状态。（`<audio>` 只在 `web/src/lib/components/AppShell.svelte` 渲染一次并由 `$effect` 挂载给引擎；路由是 `web/src/lib/router.ts` 的 History 极简实现，页面渲染在壳内 `{@render children()}`。空/错误状态见 `TrackList.svelte`（`phase` 四态＋`code`/`requestId`）与 `AlbumGrid.svelte` 的字母占位格）
+- [x] 搜索实现 composition、防抖、AbortController 和响应序号；刷新恢复队列和位置但不自动播放。（`web/src/lib/search.ts` 的 `SearchController`：合成期只置 `composing` 不发请求、默认 250ms 防抖、每次 `run` 自增 generation 并 abort 在途请求、旧响应按 `dropped` 计数丢弃；`SearchBox.svelte` 只把输入法事件翻译成命令。恢复改由 `AppShell` 在音频元素挂载后调 `player.restore()`（`player/state.ts:270`）——此前在 `App.boot()` 里调用会早于元素绑定而落到 `error`，e2e 抓到并修掉了这个顺序问题）
+- [x] 使用第一份文件的视觉初值和移动布局，首屏不加载管理页面或完整图标库。（`web/src/styles.css` 的令牌对齐 01 §6.1：`#101418/#192129/#F3F6F8/#AAB6C2/#42D3AD/#FF7D87`、控件 8px 圆角、系统字体栈不下载 Web 字体；按 §5.2 补 `input/button` 的 44px 最小触控高度、`:focus-visible` 焦点环与 `prefers-reduced-motion` 降级；移动优先单列，桌面只加宽。首屏只拉 `listTracks(limit=10)`，管理端页面尚未存在，图标为 Unicode 字形＋`aria-label`，未引入任何图标库）
 
 端到端断言示例，T07 同时建立对应 `data-testid`：
 
@@ -275,6 +275,18 @@ test('页面切换保留唯一播放器', async ({ page }) => {
 ```
 
 **验证：** `npm --prefix web run test:unit -- tests/player.test.ts`、`npm --prefix web run test:e2e -- ../e2e/playback.spec.ts`。媒体能否真实解码和发声还需本机浏览器抽查，不能只依据 mock 状态断言。
+
+> 实测（Windows / Node 24.18 / Playwright 1.63）：`npm --prefix web run check` → 0 errors 0 warnings；`npm --prefix web run test:unit` → 37 passed；`npm --prefix web run build` → JS 92.42 kB（gzip 31.86 kB）、CSS 15.73 kB（gzip 3.28 kB）；`npm --prefix web run test:e2e` → **7 passed**（播放 5 条＋未登录跳转 2 条）。播放类断言不是 mock：`player-state` 只有在 `<audio>` 真的进入 playing 后才是 `playing`，刷新用例还实测到恢复后的 `currentTime > 1.5s` 且状态未变成 playing（不自动播放）。
+>
+> 与计划的两处偏差（已按现状固化，供后续任务沿用）：
+> 1. **Playwright 用例落在 `web/e2e/` 而不是仓库根 `e2e/`。** 根目录的 spec 解析不到只装在 `web/` 的 `@playwright/test`（Node 向上找 `node_modules` 会止步于仓库根），并且 `testDir` 指到配置文件所在目录之外时，Playwright 会退回扫描配置目录，把 Vitest 的 `web/tests/*.test.ts` 当用例加载（实测 `describe` 报 `Cannot read properties of undefined (reading 'config')`）。收进 `web/` 后用 `testMatch: /.*\.spec\.ts$/` 与 `*.test.ts` 明确分家；因此本轮实际命令是 `npm --prefix web run test:e2e`（过滤参数写作 `e2e/playback.spec.ts`）。
+> 2. **浏览器用的是系统 Edge。** `playwright install chromium` 的 CDN 实测 8 秒只走 96 KB（≈12 KB/s，170 MiB 需数小时），因此 `web/playwright.config.ts` 增加 `LITEBEAT_E2E_CHANNEL` 通道，本轮以 `LITEBEAT_E2E_CHANNEL=msedge` 跑通；装好自带 Chromium 后不设置该变量即回到默认路径。Chromium/Firefox/WebKit 的三引擎矩阵与真机抽查按计划留到 T10。
+>
+> e2e 后端环境由新增的 `scripts/e2e-backend.sh` 一键准备：用 ffmpeg 在临时目录生成 3 首 30 秒真实音频（mp3、AAC/m4a、中文标题各一），写独立 `config.toml`、建管理员、用 `server/examples/seed_smoke.rs` 落曲目行后启动服务。之所以直接入库，是因为配置里的 `[[library.roots]]` 至今不会写进 `library_roots` 表（T05 遗留缺口，扫描端点因此报 `NOT_FOUND`）；用 30 秒长音而非 1 秒夹具，是因为 1 秒曲目会在断言轮询期间就触发 `ended` 变成竞态。
+>
+> 本任务未覆盖的移动端要求：01 §5.2 的“底部迷你播放器＋底部导航（含‘我的’）”要等 T08/T09 有收藏/歌单入口后才能定形，当前导航仍是顶栏（首页/音乐库/专辑/搜索）；§6.1 的“按需内联 SVG”图标留到 T10 视觉打磨替换字形图标（现已为每个纯字形控件补 `aria-label`）。
+>
+> 已知检查缺口：`npm --prefix web run check` 只覆盖 `web/src` 与 `web/tests`。实测把 `e2e` 和 `playwright.config.ts` 加进 `web/tsconfig.json` 的 `include` 会新增 12 个错误——它们用到 `node:url` 与 `process` 等 Node 全局，要先装 `@types/node` 才谈得上类型检查，而 Playwright 自身用 esbuild 只转译不查类型，所以用例里的类型错误目前不会被任何门禁捕获。本轮不为测试类型新增依赖，留到 T10 与浏览器矩阵一起处理。
 
 ### T08：收藏、歌单与历史闭环
 
