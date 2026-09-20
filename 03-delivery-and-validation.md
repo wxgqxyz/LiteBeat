@@ -178,7 +178,7 @@ CREATE INDEX IF NOT EXISTS idx_tracks_album ON tracks(sort_album COLLATE NOCASE,
 - [x] CLI 交互建立管理员；Argon2id 参数 m=32 MiB、t=3、p=1；密码不进入命令行历史。
 - [x] 设置会话 Cookie、7 天绝对有效期、最多 64 会话与到期清理；HTTPS 和本机 HTTP 配置分开。
 - [x] 限流在密码校验前执行；校验并发 1、排队最多 2；限流键表有界。
-- [ ] 登录成功返回前一页面（页面回跳依赖 T07 路由；退出清缓存在 api.ts 已实现），失败保留账号但清除密码字段；退出清除客户端音频和受保护缓存。
+- [x] 登录成功返回前一页面；失败保留账号但清除密码字段；退出清除客户端音频和受保护缓存。（回跳：`web/src/routes/Login.svelte:10-14` 的 `nextLocation()` 只接受站内绝对路径，`//host` 这类协议相对地址回落 `/`，避免开放重定向，由 `web/e2e/session.spec.ts:23` 实测登录后停在 `/library`。失败：同文件 26-31 行写回错误文案并清空 `password`，`username` 保留。退出：`web/src/App.svelte:51-60` 先调服务端 `logout`（失败也继续清本地），再 `player.signOut()` → `web/src/lib/player/state.ts:314-317` 的 `forget()`＋`clearSessionCache()`，`forget()` 释放音频引擎、清空队列并删除 `localStorage` 里的游标；端到端用例 `web/e2e/session.spec.ts:37` 实测退出后回到 `/login`、外壳连唯一音频元素一起消失、`litebeat.player.v1` 变为 `null`，且旧 Cookie 再访问 `/library` 被赶回 `/login?next=%2Flibrary`）
 
 **验证：** `cargo test -p litebeat --test auth`。登录压力测试同时记录主进程 RSS 和合法用户响应，不通过降低哈希成本满足内存指标。
 
@@ -226,6 +226,8 @@ HEAD + Range            -> 200，无响应体，完整 Content-Length
 
 **验证：** `cargo test -p litebeat --test scanner`。相同目录重复扫描不增加条目；修改一首只更新对应条目；中途模拟根目录不可读不能让整库消失；扫描过程中已有 5 路播放继续工作。
 
+> 补充（T07 阶段发现并修复合并进本任务）：扫描端点按 `root_id` 派活，但配置文件里的 `[[library.roots]]` 从未被写进 `library_roots` 表，全新安装无论传哪个 `root_id` 都得到 `NOT_FOUND`，前端连一条曲目也扫不出来。架构 §3 规定“目录只来自配置文件、API 不接受任意磁盘路径”，所以修复方向不是让端点接受路径，而是在服务启动时调用新增的 `scanner::sync_configured_roots`：以 `canonical_path`（Windows 下先剥掉 `\\?\` 前缀，与 `media/path.rs` 的比对口径一致）为主键、`name` 为次键做 upsert，配置是权威——手工停用的根会被重新启用；目录当前不可访问只告警跳过，不阻塞启动。`server/tests/scanner.rs` 的 `startup_registers_configured_roots` 断言“只登记可达目录、重复启动 id 与行数不变、改名停用后再次同步会回滚成配置值”。`GET /api/v1/admin/status`（架构 §7 已规划）尚未实现，`root_id` 目前只能从启动日志读取，属已知待补项而非缺陷。
+
 ### T06：歌曲、专辑、队列 ID 与中文搜索 API
 
 **文件：** 创建 `server/src/library/{mod,query,cursor,normalize,search}.rs`、`server/tests/library_api.rs`、`scripts/seed-library.py`。
@@ -247,7 +249,7 @@ HEAD + Range            -> 200，无响应体，完整 Content-Length
 
 ### T07：前端应用外壳、音乐库与全局播放器
 
-**文件：** 创建 `web/src/lib/{router.ts,player/state.ts,player/queue.ts}`、`web/src/lib/components/{AppShell,TrackList,AlbumGrid,PlayerBar,PlayerSheet,QueueDrawer,SearchBox,StatusPanel}.svelte`、首页/音乐库/专辑/搜索页面、`web/tests/player.test.ts`、`e2e/playback.spec.ts`。
+**文件：** 创建 `web/src/lib/{router.ts,player/state.ts,player/queue.ts}`、`web/src/lib/components/{AppShell,TrackList,AlbumGrid,PlayerBar,PlayerSheet,QueueDrawer,SearchBox,StatusPanel}.svelte`、首页/音乐库/专辑/搜索页面、`web/tests/player.test.ts`、`web/e2e/playback.spec.ts`。
 
 **输入：** 已实现的登录、曲库和媒体 API。**输出：** 真实数据驱动的展示页面及单实例播放器。
 
@@ -274,7 +276,7 @@ test('页面切换保留唯一播放器', async ({ page }) => {
 });
 ```
 
-**验证：** `npm --prefix web run test:unit -- tests/player.test.ts`、`npm --prefix web run test:e2e -- ../e2e/playback.spec.ts`。媒体能否真实解码和发声还需本机浏览器抽查，不能只依据 mock 状态断言。
+**验证：** `npm --prefix web run test:unit -- tests/player.test.ts`、`npm --prefix web run test:e2e -- e2e/playback.spec.ts`。媒体能否真实解码和发声还需本机浏览器抽查，不能只依据 mock 状态断言。
 
 > 实测（Windows / Node 24.18 / Playwright 1.63）：`npm --prefix web run check` → 0 errors 0 warnings；`npm --prefix web run test:unit` → 37 passed；`npm --prefix web run build` → JS 92.42 kB（gzip 31.86 kB）、CSS 15.73 kB（gzip 3.28 kB）；`npm --prefix web run test:e2e` → **7 passed**（播放 5 条＋未登录跳转 2 条）。播放类断言不是 mock：`player-state` 只有在 `<audio>` 真的进入 playing 后才是 `playing`，刷新用例还实测到恢复后的 `currentTime > 1.5s` 且状态未变成 playing（不自动播放）。
 >
@@ -282,15 +284,25 @@ test('页面切换保留唯一播放器', async ({ page }) => {
 > 1. **Playwright 用例落在 `web/e2e/` 而不是仓库根 `e2e/`。** 根目录的 spec 解析不到只装在 `web/` 的 `@playwright/test`（Node 向上找 `node_modules` 会止步于仓库根），并且 `testDir` 指到配置文件所在目录之外时，Playwright 会退回扫描配置目录，把 Vitest 的 `web/tests/*.test.ts` 当用例加载（实测 `describe` 报 `Cannot read properties of undefined (reading 'config')`）。收进 `web/` 后用 `testMatch: /.*\.spec\.ts$/` 与 `*.test.ts` 明确分家；因此本轮实际命令是 `npm --prefix web run test:e2e`（过滤参数写作 `e2e/playback.spec.ts`）。
 > 2. **浏览器用的是系统 Edge。** `playwright install chromium` 的 CDN 实测 8 秒只走 96 KB（≈12 KB/s，170 MiB 需数小时），因此 `web/playwright.config.ts` 增加 `LITEBEAT_E2E_CHANNEL` 通道，本轮以 `LITEBEAT_E2E_CHANNEL=msedge` 跑通；装好自带 Chromium 后不设置该变量即回到默认路径。Chromium/Firefox/WebKit 的三引擎矩阵与真机抽查按计划留到 T10。
 >
-> e2e 后端环境由新增的 `scripts/e2e-backend.sh` 一键准备：用 ffmpeg 在临时目录生成 3 首 30 秒真实音频（mp3、AAC/m4a、中文标题各一），写独立 `config.toml`、建管理员、用 `server/examples/seed_smoke.rs` 落曲目行后启动服务。之所以直接入库，是因为配置里的 `[[library.roots]]` 至今不会写进 `library_roots` 表（T05 遗留缺口，扫描端点因此报 `NOT_FOUND`）；用 30 秒长音而非 1 秒夹具，是因为 1 秒曲目会在断言轮询期间就触发 `ended` 变成竞态。
+> e2e 后端环境由新增的 `scripts/e2e-backend.sh` 一键准备：用 ffmpeg 在临时目录生成 3 首 30 秒真实音频（mp3、AAC/m4a、中文标题各一），写独立 `config.toml`、建管理员、用 `server/examples/seed_smoke.rs` 落曲目行后启动服务。这里直接入库只为省掉等待扫描任务跑完的轮询；配置里的 `[[library.roots]]` 现在会由 `scanner::sync_configured_roots` 在服务启动时登记进 `library_roots` 并打日志输出 `root_id`（见 T05 补充），全新安装可以正常创建扫描任务。用 30 秒长音而非 1 秒夹具，是因为 1 秒曲目会在断言轮询期间就触发 `ended` 变成竞态。
 >
 > 本任务未覆盖的移动端要求：01 §5.2 的“底部迷你播放器＋底部导航（含‘我的’）”要等 T08/T09 有收藏/歌单入口后才能定形，当前导航仍是顶栏（首页/音乐库/专辑/搜索）；§6.1 的“按需内联 SVG”图标留到 T10 视觉打磨替换字形图标（现已为每个纯字形控件补 `aria-label`）。
 >
 > 已知检查缺口：`npm --prefix web run check` 只覆盖 `web/src` 与 `web/tests`。实测把 `e2e` 和 `playwright.config.ts` 加进 `web/tsconfig.json` 的 `include` 会新增 12 个错误——它们用到 `node:url` 与 `process` 等 Node 全局，要先装 `@types/node` 才谈得上类型检查，而 Playwright 自身用 esbuild 只转译不查类型，所以用例里的类型错误目前不会被任何门禁捕获。本轮不为测试类型新增依赖，留到 T10 与浏览器矩阵一起处理。
+>
+> 交付后的前后端整轮走查（同一台 Windows 机器，独立临时曲库）：后端 `cargo fmt --all -- --check` 干净、`cargo clippy --workspace --all-targets --locked -- -D warnings` 退出 0、`cargo test --workspace --all-targets --locked` 退出 0（**103** 项，比 T05 收尾时多 1 项即新增的 `startup_registers_configured_roots`）；前端 `check` → 0 errors 0 warnings、`test:unit` → 37 passed、`build` → JS 92.51 kB（gzip 31.94 kB）＋CSS 15.73 kB（gzip 3.28 kB）、`test:e2e` → **9 passed**（播放 5 条＋会话 4 条）。走查共查出四处真缺陷（不是设计如此）：
+> 1. **开发模式下无法登录。** Vite 代理默认改写 `Host`，而后端 `server/src/auth/csrf.rs:49` 要求 `Origin` 与 `Host` 完全一致，于是浏览器带的 `:5173` Origin 撞上改写后的 `:8090` Host 被判 403。修复前的证据是本轮用真实浏览器手工走查登录表单，页面报“请求来源或 CSRF 令牌校验未通过”（HTTP 403）；修复即 `web/vite.config.ts` 设 `changeOrigin: false`。之所以此前自动化全绿，是因为其余端到端用例靠 `storageState` 注入会话，没人真正发过一次表单登录请求——因此补了 `web/e2e/session.spec.ts:23` 覆盖这条路径（它是修复之后才加的，见下面“未执行的反向验证”）。
+> 2. **刷新恢复后进度滑块永久卡在最左。** HTML range 的 `value` 会被当前 `max` 夹住，而表达式值没变时 Svelte 不会重新赋值；恢复时“位置先到、时长后到”，`max={seconds || 1}` 先把滑块钉在 1，拿到真时长也回不来。修在 `PlayerBar.svelte:16` 与 `PlayerSheet.svelte`（`max = Math.max(时长, 当前值, 1)`），并在刷新用例里加了“滑块 value 与恢复位置相差 ≤2 s”的断言（`web/e2e/playback.spec.ts:52-56`）。
+> 3. **全新安装无法创建扫描任务。** 见 T05 的补充记录：根目录登记改到服务启动时做，`server/tests/scanner.rs` 加了回归测试，`scripts/e2e-backend.sh` 的注释随之同步。修完之后这条又牵出半个问题：冒烟造数例子 `server/examples/seed_smoke.rs` 按 `name = 'smoke'` 找根，可同一条路径这时已被配置里的名字占住，于是它走插入分支并撞唯一键——真实报错是复用端到端临时库重启后端时的 `UNIQUE constraint failed: library_roots.canonical_path`。修复是把例子的根身份键也改成“先按规范化路径找、再按名字找”，同时它早已改成的可重复入库（不再撞 `tracks.root_id/relative_path`）继续有效；现在启动日志是 `曲库根登记已更新 root_id=1 name=e2e-music`，造数打印三首“已存在，跳过”。
+> 4. **口令校验池的在途上限比文档多一个，且它的单测本身是竞态。** 本计划 T03 的验收项定的是“校验并发 1、排队最多 2”，而 `VerifyPool::new` 把 `sync_channel` 容量直接写成 `VERIFY_INFLIGHT`（3）——worker 手上那个作业不占通道额度，所以真实在途最多能到 4。同一处逻辑的单测又是“连提 3 个再断言第 4 个 `Busy`”的写法，只有在工作线程还没来得及取件时才成立，因此会偶发红；本轮就在整套跑测中真实抓到一次：`assertion failed: matches!(overflow, Err(VerifyError::Busy))`（`server/src/auth/rate_limit.rs`）。修复是把通道容量改成 `VERIFY_INFLIGHT - 1`（在途总数这才等于文档的 3），测试改成先用一个 `running` 信号确认 worker 已被首个作业占住、再数排队位。修后该测试单跑 8 次全绿，`cargo test --workspace --all-targets --locked` 仍是 103 项全绿。
+>
+> 未执行的反向验证（如实记录）：本想临时把 `changeOrigin` 改回 `true`、把 `max` 改回 `seconds || 1`，用“新用例跑红”来证明它们确实守得住回归。两次尝试都被本机安全策略拦下（判定为回退安全修复／故意引入回归），改回后已确认源码仍是修复态。所以第 1、2 条“新断言能抓到回归”目前只有代码路径推理＋修复前后的人工浏览器走查，没有跑红的机器记录。
+>
+> 走查中判定为“设计如此”或按计划留给后续任务、本轮不改的项：登录限流是每 IP 每分钟 5 次且不可配置（`server/src/auth/rate_limit.rs:21-24`），端到端连续重跑会吃到 429 造成假失败——已把退出用例改成 API 登录注入会话以少占配额，限流本身属安全设计；`GET /api/v1/admin/status`（架构 §7）未实现，`root_id` 只能从启动日志读；三浏览器矩阵、浅色主题、内联 SVG 图标、移动端底部导航按计划留给 T08–T10；`@testing-library/svelte` 是未使用的 devDependency，删依赖属人工决定。
 
 ### T08：收藏、歌单与历史闭环
 
-**文件：** 创建 `server/src/playlists/{mod,repo,routes}.rs`、`server/src/history/{mod,repo,routes}.rs`、`server/tests/user_library.rs`，新增收藏/歌单页面、`web/tests/playlist.test.ts`、`e2e/user-library.spec.ts`。
+**文件：** 创建 `server/src/playlists/{mod,repo,routes}.rs`、`server/src/history/{mod,repo,routes}.rs`、`server/tests/user_library.rs`，新增收藏/歌单页面、`web/tests/playlist.test.ts`、`web/e2e/user-library.spec.ts`。
 
 **输入：** owner_id、曲目 ID、现有会话及数据库写线程。**输出：** 收藏、歌单、历史 API 与页面。
 
@@ -301,11 +313,11 @@ test('页面切换保留唯一播放器', async ({ page }) => {
 - [ ] 播放满 30s 或短曲播放结束上报一次 event_id，服务端去重并裁剪到每用户 500 条；跳播 1 秒不记为已播放。
 - [ ] 完成刷新及服务重启后的数据恢复验收，删除歌单不删除歌曲文件。
 
-**验证：** `cargo test -p litebeat --test user_library` 和 `npm --prefix web run test:e2e -- ../e2e/user-library.spec.ts`。构造“服务端已提交但客户端没收到响应”的重试，验证没有重复歌单或条目。
+**验证：** `cargo test -p litebeat --test user_library` 和 `npm --prefix web run test:e2e -- e2e/user-library.spec.ts`。构造“服务端已提交但客户端没收到响应”的重试，验证没有重复歌单或条目。
 
 ### T09：移动端、可访问性与资源生命周期
 
-**文件：** 完善 `web/src/styles/`、播放器与页面组件，创建 `e2e/responsive.spec.ts`、`e2e/lifecycle.spec.ts`、`web/tests/search.test.ts`。
+**文件：** 完善 `web/src/styles/`、播放器与页面组件，创建 `web/e2e/responsive.spec.ts`、`web/e2e/lifecycle.spec.ts`、`web/tests/search.test.ts`。
 
 **输入：** 完整 P0 使用流程。**输出：** 桌面/移动交互、错误恢复、可证明的事件与缓存清理。
 
@@ -316,7 +328,7 @@ test('页面切换保留唯一播放器', async ({ page }) => {
 - [ ] 校验 DOM 中一个 audio、仅一组音频事件监听；详情缓存≤100，结果缓存≤3 页；隐藏页面关闭无意义轮询。
 - [ ] 检查浅色/深色主题、减少动态效果、空库和错误状态截图。
 
-**验证：** `npm --prefix web run test:e2e -- ../e2e/responsive.spec.ts ../e2e/lifecycle.spec.ts`。Chromium、Firefox、WebKit 自动化加实际 Safari/iOS、Chrome/Android 抽查；记录具体浏览器版本与音频编码样本。
+**验证：** `npm --prefix web run test:e2e -- e2e/responsive.spec.ts e2e/lifecycle.spec.ts`。Chromium、Firefox、WebKit 自动化加实际 Safari/iOS、Chrome/Android 抽查；记录具体浏览器版本与音频编码样本。
 
 ### T10：性能预算、压力与长稳验证
 
@@ -443,7 +455,7 @@ npm --prefix web run test:e2e
 node scripts/check-bundle.mjs web/dist
 ```
 
-T01/T07 创建 npm scripts：`check` 运行 Svelte/TypeScript 检查，`test:unit` 运行 Vitest，`test:e2e` 运行 Playwright。Playwright 使用独立临时数据目录与测试配置，`testDir` 指向根目录 `e2e/`，不复用管理员真实音乐库。
+T01/T07 创建 npm scripts：`check` 运行 Svelte/TypeScript 检查，`test:unit` 运行 Vitest，`test:e2e` 运行 Playwright。Playwright 的 `testDir` 是 `web/e2e/`（用例过滤参数相对 `web/` 写，如 `e2e/playback.spec.ts`），跑之前先用 `scripts/e2e-backend.sh` 起一个独立临时数据目录的后端，不复用管理员真实音乐库。
 
 每次变更先运行影响范围内的测试。完整功能、构建和跨平台检查在里程碑收尾运行；依赖升级、流协议或数据库迁移变化必须重跑相关协议/恢复测试。没有实际执行记录就不能写“通过”。
 
