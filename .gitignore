@@ -2,5 +2,9 @@
 /web/node_modules/
 /web/dist/
 /target/
+/web/e2e/.auth/
+/test-results/
+/web/test-results/
+/web/playwright-report/
 *.log
 .env

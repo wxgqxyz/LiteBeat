@@ -1,4 +1,11 @@
-import type { Id } from './contracts';
+import type {
+  AlbumSummary,
+  Id,
+  Page,
+  QueueIds,
+  TrackDetail,
+  TrackSummary,
+} from './contracts';
 
 export interface SessionInfo {
   user_id: Id;
@@ -70,13 +77,25 @@ async function send(path: string, init: RequestInit): Promise<unknown> {
     headers,
     credentials: 'same-origin',
   });
-  const text = await response.text();
-  const body: unknown = text ? JSON.parse(text) : null;
+  if (response.status === 401) clearSessionCache();
   if (!response.ok) {
-    if (response.status === 401) clearSessionCache();
-    throw toApiError(response.status, body);
+    const body: unknown = await readBody(response);
+    const error = toApiError(response.status, body);
+    recordError(error);
+    throw error;
   }
-  return body;
+  return readBody(response);
+}
+
+async function readBody(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (!text) return null;
+  // 反向代理可能给出 HTML 错误页：解析失败时按空体处理，由状态码决定错误。
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
 }
 
 export async function login(username: string, password: string): Promise<void> {
@@ -101,4 +120,132 @@ export async function logout(): Promise<void> {
   const token = csrfToken ?? (await getSession()).csrf_token;
   await send('/auth/logout', { method: 'POST', headers: { 'x-csrf-token': token } });
   clearSessionCache();
+}
+
+// 最近一次请求失败：StatusPanel 需要如实展示 error.code 与 request_id。
+let lastError: ApiError | null = null;
+const errorListeners = new Set<(error: ApiError | null) => void>();
+
+function recordError(error: ApiError): void {
+  lastError = error;
+  for (const listener of errorListeners) listener(error);
+}
+
+export function lastApiError(): ApiError | null {
+  return lastError;
+}
+
+export function clearApiError(): void {
+  lastError = null;
+  for (const listener of errorListeners) listener(null);
+}
+
+export function subscribeApiError(listener: (error: ApiError | null) => void): () => void {
+  errorListeners.add(listener);
+  return () => errorListeners.delete(listener);
+}
+
+function isBudgetError(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    error.status === 503 &&
+    (error.code === 'QUERY_TIMEOUT' || error.code === 'LIBRARY_BUSY')
+  );
+}
+
+const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+// 只读查询有 200ms 预算，到点返回 503；这里只做一次有界重试，不循环打库。
+export async function getJson<T>(
+  path: string,
+  init: { signal?: AbortSignal } = {},
+): Promise<T> {
+  try {
+    return (await send(path, { method: 'GET', signal: init.signal })) as T;
+  } catch (error) {
+    if (!isBudgetError(error) || init.signal?.aborted) throw error;
+    await wait(250);
+    if (init.signal?.aborted) throw error;
+    return (await send(path, { method: 'GET', signal: init.signal })) as T;
+  }
+}
+
+export type TrackSort = 'title' | 'recent';
+
+export interface ListOptions {
+  limit?: number;
+  cursor?: string | null;
+  signal?: AbortSignal;
+}
+
+function query(params: Record<string, string | number | undefined | null>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== '') search.set(key, String(value));
+  }
+  const text = search.toString();
+  return text ? `?${text}` : '';
+}
+
+export function listTracks(
+  options: ListOptions & { artist?: string; sort?: TrackSort } = {},
+): Promise<Page<TrackSummary>> {
+  return getJson(
+    `/tracks${query({
+      limit: options.limit,
+      cursor: options.cursor,
+      artist: options.artist,
+      sort: options.sort,
+    })}`,
+    { signal: options.signal },
+  );
+}
+
+export function getTrack(id: Id, options: { signal?: AbortSignal } = {}): Promise<TrackDetail> {
+  return getJson(`/tracks/${encodeURIComponent(id)}`, { signal: options.signal });
+}
+
+export function listAlbums(options: ListOptions = {}): Promise<Page<AlbumSummary>> {
+  return getJson(`/albums${query({ limit: options.limit, cursor: options.cursor })}`, {
+    signal: options.signal,
+  });
+}
+
+export function listAlbumTracks(
+  albumId: Id,
+  options: ListOptions = {},
+): Promise<Page<TrackSummary>> {
+  return getJson(
+    `/albums/${encodeURIComponent(albumId)}/tracks${query({
+      limit: options.limit,
+      cursor: options.cursor,
+    })}`,
+    { signal: options.signal },
+  );
+}
+
+export function searchTracks(
+  q: string,
+  options: ListOptions = {},
+): Promise<Page<TrackSummary>> {
+  return getJson(
+    `/search${query({ q, limit: options.limit, cursor: options.cursor })}`,
+    { signal: options.signal },
+  );
+}
+
+export type QueueScope = 'library' | 'album' | 'favorites' | 'playlist';
+
+export function queueIds(
+  scope: QueueScope,
+  options: { albumId?: Id; playlistId?: Id; signal?: AbortSignal } = {},
+): Promise<QueueIds> {
+  return getJson(
+    `/queue-ids${query({
+      scope,
+      album_id: options.albumId,
+      playlist_id: options.playlistId,
+    })}`,
+    { signal: options.signal },
+  );
 }

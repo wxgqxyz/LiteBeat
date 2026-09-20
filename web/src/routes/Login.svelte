@@ -135,7 +135,7 @@
 
   .error {
     margin: 0;
-    color: #ff9a8a;
+    color: var(--danger);
     background: #192129;
     border-radius: 8px;
     padding: 10px 14px;
