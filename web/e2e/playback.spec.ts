@@ -49,6 +49,11 @@ test('刷新恢复队列与位置，但不自动播放', async ({ page }) => {
   await expect(page.getByTestId('player-state')).not.toHaveText('playing', { timeout: 3_000 });
   const restored = await page.locator('audio').first().evaluate((el) => el.currentTime);
   expect(restored).toBeGreaterThan(1.5);
+  // 滑块 value 必须跟着恢复出的位置走：曾因为「位置先到、时长后到」被 max 夹死在旧上限。
+  const sliderValue = await page
+    .getByTestId('player-seek')
+    .evaluate((el) => Number((el as HTMLInputElement).value));
+  expect(Math.abs(sliderValue - restored)).toBeLessThanOrEqual(2);
   await page.getByTestId('queue-open').click();
   await expect(page.getByTestId('queue-item').first()).toBeVisible({ timeout: 5_000 });
 });
