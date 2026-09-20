@@ -232,6 +232,79 @@ pub async fn mark_interrupted(db: &Db) -> Result<(), DbError> {
     Ok(())
 }
 
+/// 服务启动时调用：把配置文件里的曲库根登记进 `library_roots`。
+///
+/// 架构文档 §3 定了“目录只来自配置文件、API 不接受任意磁盘路径”，而
+/// `POST /api/v1/admin/scans` 按 `root_id` 派活。少了这一步，全新安装的库里这张表
+/// 永远是空的，任何根都只会得到 `NOT_FOUND`，扫描功能对使用者完全不可达。
+///
+/// 身份键用规范化路径（与 `media/path.rs` 比对的是同一个形态）：路径已存在就同步
+/// 名称并重新启用——配置文件是权威，手工停用的根会在下次启动恢复；都不存在才插入。
+/// 目录此刻不可访问（NAS 未挂载等）只告警跳过，不挡启动，扫描端点会另行报
+/// `ROOT_UNAVAILABLE`。
+pub async fn sync_configured_roots(
+    db: &Db,
+    roots: &[crate::config::LibraryRootConfig],
+) -> Result<(), DbError> {
+    for root in roots {
+        let Ok(canonical) = std::fs::canonicalize(&root.path) else {
+            tracing::warn!(name = %root.name, "曲库根当前不可访问，本次不登记");
+            continue;
+        };
+        let stored = crate::media::strip_verbatim(&canonical)
+            .display()
+            .to_string();
+        let by_path = db
+            .query_rows(
+                "SELECT id FROM library_roots WHERE canonical_path = ? LIMIT 1",
+                vec![Value::Text(stored.clone())],
+            )
+            .await?;
+        let by_name = match by_path.first() {
+            Some(_) => by_path,
+            None => {
+                db.query_rows(
+                    "SELECT id FROM library_roots WHERE name = ? LIMIT 1",
+                    vec![Value::Text(root.name.clone())],
+                )
+                .await?
+            }
+        };
+        match by_name
+            .first()
+            .and_then(|row| row.first())
+            .and_then(Value::as_i64)
+        {
+            Some(id) => {
+                db.execute(
+                    "UPDATE library_roots SET name = ?, canonical_path = ?, enabled = 1 WHERE id = ?",
+                    vec![
+                        Value::Text(root.name.clone()),
+                        Value::Text(stored),
+                        Value::Integer(id),
+                    ],
+                )
+                .await?;
+                tracing::info!(root_id = id, name = %root.name, "曲库根登记已更新");
+            }
+            None => {
+                let reply = db
+                    .execute(
+                        "INSERT INTO library_roots(name, canonical_path, enabled) VALUES (?, ?, 1)",
+                        vec![Value::Text(root.name.clone()), Value::Text(stored)],
+                    )
+                    .await?;
+                tracing::info!(
+                    root_id = reply.last_rowid,
+                    name = %root.name,
+                    "曲库根已登记，可用于创建扫描任务"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // 扫描主循环
 // ---------------------------------------------------------------------------

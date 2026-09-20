@@ -12,4 +12,6 @@ pub mod protocol;
 pub mod walk;
 pub mod worker;
 
-pub use coordinator::{ScanConfig, ScanEnv, mark_interrupted, scanner_router};
+pub use coordinator::{
+    ScanConfig, ScanEnv, mark_interrupted, scanner_router, sync_configured_roots,
+};

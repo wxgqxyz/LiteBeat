@@ -7,8 +7,8 @@
 #   LITEBEAT_E2E_USER=… LITEBEAT_E2E_PASSWORD=… npm --prefix web run test:e2e
 #
 # 依赖：ffmpeg（生成 30 秒长音；1 秒夹具播完就 ended，会让播放断言变竞态）。
-# 曲目行由 server/examples/seed_smoke.rs 直接入库——配置里的 [[library.roots]]
-# 目前不会被写进 library_roots 表（已知缺口），所以这里不走扫描端点。
+# 曲目行由 server/examples/seed_smoke.rs 直接入库，省掉等扫描任务跑完的轮询；
+# 服务启动时仍会把 [[library.roots]] 登记进 library_roots（扫描端点按 root_id 派活）。
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

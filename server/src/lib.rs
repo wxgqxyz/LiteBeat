@@ -23,6 +23,8 @@ pub async fn serve(
         .await??;
     // 上一进程遗留的 queued/running 扫描必已丢失，先落 interrupted 再对外服务。
     scanner::mark_interrupted(&db).await?;
+    // 曲库根只来自配置文件，但扫描端点按 root_id 取任务，所以必须先把它们登记进库。
+    scanner::sync_configured_roots(&db, &config.library.roots).await?;
     let listener = TcpListener::bind(address).await?;
     let media = Arc::new(media::MediaEnv::new(
         &config.limits,

@@ -35,10 +35,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let plain = strip_verbatim(&std::fs::canonicalize(&root)?);
     let root_text = plain.display().to_string();
-    let existing = db
-        .query_rows("SELECT id FROM library_roots WHERE name = 'smoke'", vec![])
+    // 身份键是规范化路径：启动登记可能已用配置里的名字占了这条路径，
+    // 只按 name 找会走插入分支并撞 canonical_path 的 UNIQUE 约束。
+    let by_path = db
+        .query_rows(
+            "SELECT id FROM library_roots WHERE canonical_path = ? LIMIT 1",
+            vec![Value::Text(root_text.clone())],
+        )
         .await?;
-    let root_id = match existing.first() {
+    let found = match by_path.first() {
+        Some(_) => by_path,
+        None => {
+            db.query_rows(
+                "SELECT id FROM library_roots WHERE name = 'smoke' LIMIT 1",
+                vec![],
+            )
+            .await?
+        }
+    };
+    let root_id = match found.first() {
         Some(row) => row[0].as_i64().ok_or("库根缺少 id")?,
         None => {
             db.execute(
@@ -56,6 +71,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and_then(|n| n.to_str())
             .ok_or("非法文件名")?
             .to_string();
+        let present = db
+            .query_rows(
+                "SELECT id FROM tracks WHERE root_id = ? AND relative_path = ?",
+                vec![Value::Integer(root_id), Value::Text(name.clone())],
+            )
+            .await?;
+        if let Some(row) = present.first() {
+            // 复用同一个临时库时会有已存在的曲目，重复播种不该失败。
+            println!(
+                "track {}：{name}（已存在，跳过）",
+                row[0].as_i64().unwrap_or(0)
+            );
+            continue;
+        }
         let metadata = std::fs::metadata(file)?;
         let mtime = metadata
             .modified()?

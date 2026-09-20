@@ -875,3 +875,66 @@ async fn startup_marks_running_as_interrupted() {
         .unwrap();
     assert_eq!(still_completed[0][0].as_i64(), Some(1));
 }
+
+#[tokio::test]
+async fn startup_registers_configured_roots() {
+    use litebeat::config::LibraryRootConfig;
+    use litebeat::scanner::sync_configured_roots;
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open(dir.path().join("litebeat.db"), DbOptions::default()).unwrap();
+    let music = dir.path().join("music");
+    std::fs::create_dir_all(&music).unwrap();
+
+    let canonical = std::fs::canonicalize(&music).unwrap().display().to_string();
+    // 复刻 crate 内的 strip_verbatim：Windows 规范化路径带 \\?\ 前缀，入库要去掉，
+    // 否则与 media/path.rs 的 allowed_roots 逐比对口径不一致。
+    let stored = canonical.strip_prefix(r"\\?\").unwrap_or(&canonical);
+
+    let roots = vec![
+        LibraryRootConfig {
+            name: "我的音乐".into(),
+            path: music.clone(),
+        },
+        // 未挂载的 NAS 之类：告警跳过，不能挡住启动，也不能插半行。
+        LibraryRootConfig {
+            name: "nas".into(),
+            path: dir.path().join("not-mounted"),
+        },
+    ];
+    sync_configured_roots(&db, &roots).await.unwrap();
+
+    async fn read(db: &Db) -> Vec<Vec<Value>> {
+        db.query_rows(
+            "SELECT id, name, canonical_path, enabled FROM library_roots ORDER BY id",
+            vec![],
+        )
+        .await
+        .unwrap()
+    }
+
+    let rows = read(&db).await;
+    assert_eq!(rows.len(), 1, "只有可访问的根入库: {rows:?}");
+    assert_eq!(rows[0][1].as_text(), Some("我的音乐"));
+    assert_eq!(rows[0][2].as_text(), Some(stored));
+    assert_eq!(rows[0][3].as_i64(), Some(1));
+    let root_id = rows[0][0].as_i64().unwrap();
+
+    // 重复启动不产生第二行；配置文件是权威，改名与手工停用都在下次启动被校正回来。
+    sync_configured_roots(&db, &roots).await.unwrap();
+    let again = read(&db).await;
+    assert_eq!(again.len(), 1);
+    assert_eq!(again[0][0].as_i64(), Some(root_id));
+
+    db.execute(
+        "UPDATE library_roots SET name = '旧名', enabled = 0 WHERE id = ?",
+        vec![Value::Integer(root_id)],
+    )
+    .await
+    .unwrap();
+    sync_configured_roots(&db, &roots).await.unwrap();
+    let reconciled = read(&db).await;
+    assert_eq!(reconciled[0][1].as_text(), Some("我的音乐"));
+    assert_eq!(reconciled[0][3].as_i64(), Some(1));
+    assert_eq!(reconciled[0][0].as_i64(), Some(root_id));
+}
