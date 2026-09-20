@@ -11,6 +11,9 @@
   const durationMs = $derived(snapshot.player.durationMs ?? track?.duration_ms ?? 0);
   const seconds = $derived(durationMs > 0 ? durationMs / 1000 : 0);
   const shown = $derived(dragging ? dragSeconds : snapshot.player.positionMs / 1000);
+  // max 不能低于当前值：浏览器会把越界的 range value 夹住，而表达式值没变时 Svelte
+  // 不会重新赋值，于是「位置先到、时长后到」（刷新恢复就是这样）滑块会永久卡在最左。
+  const limit = $derived(Math.max(seconds, shown, 1));
 
   const LABEL: Record<string, string> = {
     idle: '空闲',
@@ -44,7 +47,7 @@
         data-testid="player-seek"
         class="slider"
         min="0"
-        max={seconds || 1}
+        max={limit}
         step="0.1"
         value={shown}
         disabled={durationMs <= 0}

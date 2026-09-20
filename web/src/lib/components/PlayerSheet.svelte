@@ -10,6 +10,9 @@
 
   const track = $derived(snapshot.player.track);
   const durationMs = $derived(snapshot.player.durationMs ?? track?.duration_ms ?? 0);
+  const shown = $derived(snapshot.player.positionMs / 1000);
+  // 同 PlayerBar：max 低于 value 会被浏览器夹住且不会自动恢复。
+  const limit = $derived(Math.max(durationMs / 1000, shown, 1));
   let detail = $state<TrackDetail | null>(null);
 
   $effect(() => {
@@ -49,9 +52,9 @@
       type="range"
       class="slider"
       min="0"
-      max={durationMs > 0 ? durationMs / 1000 : 1}
+      max={limit}
       step="0.1"
-      value={snapshot.player.positionMs / 1000}
+      value={shown}
       disabled={durationMs <= 0}
       aria-label="播放位置"
       onchange={(event) => player.seek(Number((event.currentTarget as HTMLInputElement).value))}
