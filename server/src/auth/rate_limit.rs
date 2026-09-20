@@ -200,7 +200,8 @@ impl Default for VerifyPool {
 
 impl VerifyPool {
     pub fn new() -> Self {
-        let (tx, rx) = mpsc::sync_channel::<Job>(VERIFY_INFLIGHT);
+        // 通道只装排队件：worker 手上那一个不占额度，所以在途总数才等于 VERIFY_INFLIGHT。
+        let (tx, rx) = mpsc::sync_channel::<Job>(VERIFY_INFLIGHT - 1);
         let started = std::thread::Builder::new()
             .name("argon2-verify".into())
             .spawn(move || {
@@ -357,14 +358,32 @@ mod tests {
         let pool = VerifyPool::new();
         let mut gates = Vec::new();
         let mut replies = Vec::new();
-        for _ in 0..VERIFY_INFLIGHT {
+
+        // 必须先把 worker 占住再数排队位：worker 何时从通道取件不确定，
+        // 手快时它会腾出一个空位，于是「队满即拒」偶发变成「还能再塞一个」。
+        let (running_tx, running_rx) = mpsc::channel::<()>();
+        let (gate_tx, gate_rx) = mpsc::channel::<()>();
+        gates.push(gate_tx);
+        replies.push(
+            pool.submit(Box::new(move || {
+                let _ = running_tx.send(());
+                let _ = gate_rx.recv();
+                Ok(true)
+            }))
+            .expect("首个作业应在途上限内放行"),
+        );
+        running_rx
+            .recv()
+            .expect("worker 必须真的开始执行首个作业，否则后面的计数不成立");
+
+        for _ in 1..VERIFY_INFLIGHT {
             let (gate_tx, gate_rx) = mpsc::channel::<()>();
             let reply = pool
                 .submit(Box::new(move || {
                     let _ = gate_rx.recv();
                     Ok(true)
                 }))
-                .expect("在途上限内应放行");
+                .expect("排队位未用尽应放行");
             gates.push(gate_tx);
             replies.push(reply);
         }
